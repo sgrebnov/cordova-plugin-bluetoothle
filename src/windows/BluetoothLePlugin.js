@@ -6,34 +6,102 @@ var wsc = Windows.Security.Cryptography;
 var initialized = false;
 var cachedServices = [];
 
+var WATCHER;
+var scanCallback;
+
 module.exports = {
 
+  startScan: function (successCallback, errorCallback, params) {
+
+    var DeviceInformation = Windows.Devices.Enumeration.DeviceInformation;
+    var DeviceInformationKind = Windows.Devices.Enumeration.DeviceInformationKind;
+    var DeviceWatcherStatus = Windows.Devices.Enumeration.DeviceWatcherStatus;
+
+    var NAME_KEY = "System.ItemNameDisplay";
+    var ADDRESS_KEY = "System.Devices.Aep.DeviceAddress";
+
+    if (!WATCHER) {
+      // watch BLE devices using device watcher.
+      var selector = "(System.Devices.Aep.ProtocolId:=\"{bb7bb05e-5972-42b5-94fc-76eaa7084d49}\") AND " +
+                      "(System.Devices.Aep.CanPair:=System.StructuredQueryType.Boolean#True OR " +
+                      "System.Devices.Aep.IsPaired:=System.StructuredQueryType.Boolean#True)";
+
+      WATCHER = DeviceInformation.createWatcher(selector, [NAME_KEY, ADDRESS_KEY], DeviceInformationKind.associationEndpoint);
+    }
+
+    if (WATCHER.status !== DeviceWatcherStatus.started &&
+        WATCHER.status !== DeviceWatcherStatus.created &&
+        WATCHER.status !== DeviceWatcherStatus.aborted) {
+
+      errorCallback({ error: 'Scan already in progress' });
+      return;
+    }
+
+    scanCallback = function (obj) {
+      var device = obj.detail && obj.detail[0];
+      if (!device) return;
+
+      var deviceInfo = {
+        status: 'scanResult',
+        name: device.properties.hasKey(NAME_KEY) && device.properties.lookup(NAME_KEY),
+        address: device.properties.hasKey(ADDRESS_KEY) && device.properties.lookup(ADDRESS_KEY)
+      };
+
+      successCallback(deviceInfo, { keepCallback: true });
+    };
+
+      WATCHER.addEventListener("added", scanCallback, false);
+      WATCHER.addEventListener("updated", scanCallback, false);
+      WATCHER.start();
+
+      successCallback({ status: 'scanStarted' }, { keepCallback: true });
+    },
+
+  stopScan: function (successCallback, errorCallback) {
+    var DeviceWatcherStatus = Windows.Devices.Enumeration.DeviceWatcherStatus;
+
+    if (WATCHER && (WATCHER.status === DeviceWatcherStatus.started ||
+        WATCHER.status === DeviceWatcherStatus.enumerationCompleted)) {
+
+      WATCHER.stop();
+      WATCHER.removeEventListener("added", scanCallback);
+      WATCHER.removeEventListener("updated", scanCallback);
+    }
+
+    successCallback({ status: "scanStopped" });
+  },
+
   initialize: function (successCallback, errorCallback, params) {
-    var selector = "System.Devices.InterfaceClassGuid:=\"{6E3BB679-4372-40C8-9EAA-4509DF260CD8}\" AND System.Devices.InterfaceEnabled:=System.StructuredQueryType.Boolean#True";
-    deviceInfo.findAllAsync(selector, null).then(function (devices) {
-      if (devices.length > 0) {
-        initialized = true;
-        successCallback({ status: "enabled" });
-      } else {
-        if (params && params.length > 0 && params[0].request) {
-          try {
-            Windows.UI.ApplicationSettings.SettingsPane.show();
-          } catch (ex) {
-            Windows.System.Launcher.launchUriAsync(Windows.Foundation.Uri("ms-settings-bluetooth:"));
-          }
-        }
-        errorCallback({ error: "initialize", message: "No BLE devices found." });
-      }
-    }, function (error) {
-      if (params && params.length > 0 && params[0].request) {
-        try {
-          Windows.UI.ApplicationSettings.SettingsPane.show();
-        } catch (ex) {
-          Windows.System.Launcher.launchUriAsync(Windows.Foundation.Uri("ms-settings-bluetooth:"));
-        }
-      }
-      errorCallback({ error: "initialize", message: error.message });
-    });
+    // Somehow deviceInfo.findAllAsync returns empty device list.
+    // However we don't need to initialize for performing scan operations so just report success here
+    successCallback({ status: "enabled" });
+    return;
+
+    // var selector = "System.Devices.InterfaceClassGuid:=\"{6E3BB679-4372-40C8-9EAA-4509DF260CD8}\" AND System.Devices.InterfaceEnabled:=System.StructuredQueryType.Boolean#True";
+    // deviceInfo.findAllAsync(selector, null).then(function (devices) {
+    //   if (devices.length > 0) {
+    //     initialized = true;
+    //     successCallback({ status: "enabled" });
+    //   } else {
+    //     if (params && params.length > 0 && params[0].request) {
+    //       try {
+    //         Windows.UI.ApplicationSettings.SettingsPane.show();
+    //       } catch (ex) {
+    //         Windows.System.Launcher.launchUriAsync(Windows.Foundation.Uri("ms-settings-bluetooth:"));
+    //       }
+    //     }
+    //     errorCallback({ error: "initialize", message: "No BLE devices found." });
+    //   }
+    // }, function (error) {
+    //   if (params && params.length > 0 && params[0].request) {
+    //     try {
+    //       Windows.UI.ApplicationSettings.SettingsPane.show();
+    //     } catch (ex) {
+    //       Windows.System.Launcher.launchUriAsync(Windows.Foundation.Uri("ms-settings-bluetooth:"));
+    //     }
+    //   }
+    //   errorCallback({ error: "initialize", message: error.message });
+    // });
   },
 
   retrieveConnected: function (successCallback, errorCallback, params) {
